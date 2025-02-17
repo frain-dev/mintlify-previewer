@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta content="width=device-width, initial-scale=1.0" name="viewport">
+    <title>Loading Mintlify Documentation</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background-color: #f4f4f5;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            color: #18181b;
+        }
+
+        .container {
+            text-align: center;
+            background-color: white;
+            padding: 2rem;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            max-width: 90%;
+            width: 400px;
+        }
+
+        h1 {
+            font-size: 1.5rem;
+            margin-bottom: 1rem;
+        }
+
+        p {
+            font-size: 1rem;
+            color: #52525b;
+            margin-bottom: 1.5rem;
+        }
+
+        .loader {
+            border: 4px solid #e4e4e7;
+            border-top: 4px solid #3b82f6;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 1.5rem;
+        }
+
+        @keyframes spin {
+            0% {
+                transform: rotate(0deg);
+            }
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+
+        .built-by {
+            margin-top: 2rem;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            space-y: 0.5rem;
+        }
+
+        .built-by span {
+            font-size: 0.875rem;
+            color: #71717a;
+        }
+
+        .built-by img {
+            height: 1.5rem;
+        }
+
+        @media (max-width: 1024px) {
+            .built-by {
+                display: none;
+            }
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="loader"></div>
+    <h1>Mintlify is starting...</h1>
+    <p>Please wait while your documentation preview loads. This may take a few moments.</p>
+</div>
+<div class="built-by">
+    <span>Built By</span>
+    <a href="https://getconvoy.io/?utm_source=compareretries" rel="noopener noreferrer" target="_blank">
+        <img alt="Convoy" src="https://getconvoy.io/svg/convoy-logo-full-new.svg">
+    </a>
+</div>
+<script>
+    // Function to refresh the page
+    function refreshPage() {
+        window.location.reload();
+    }
+
+    // Set up periodic refresh (every 5 seconds)
+    setInterval(refreshPage, 5000);
+</script>
+</body>
+</html>
