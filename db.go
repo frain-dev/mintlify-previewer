@@ -20,6 +20,7 @@ type Deployment struct {
 	UUID      string `json:"uuid"`
 	GitHubURL string `json:"github_url"`
 	Branch    string `json:"branch"`
+	DocsPath  string `json:"docs_path"`
 	DeployURL string `json:"deployment_url"`
 	Status    string `json:"status"`
 }
@@ -70,7 +71,7 @@ func restoreDeployments() {
 		return
 	}
 
-	rows, err := db.Query("SELECT uuid, github_url, branch, deployment_url, status FROM deployments WHERE status IN ('running', 'starting')")
+	rows, err := db.Query("SELECT uuid, github_url, branch, docs_path, deployment_url, status FROM deployments WHERE status IN ('running', 'starting')")
 	if err != nil {
 		log.Fatalf("Failed to query deployments: %v", err)
 	}
@@ -78,7 +79,7 @@ func restoreDeployments() {
 
 	for rows.Next() {
 		var dep Deployment
-		if err := rows.Scan(&dep.UUID, &dep.GitHubURL, &dep.Branch, &dep.DeployURL, &dep.Status); err != nil {
+		if err := rows.Scan(&dep.UUID, &dep.GitHubURL, &dep.Branch, &dep.DocsPath, &dep.DeployURL, &dep.Status); err != nil {
 			log.Infof("Failed to scan deployment: %v", err)
 			return
 		}
@@ -101,11 +102,7 @@ func restoreDeployments() {
 				}
 			}
 
-			effectiveMintJSONPath := mintJSONPath
-			if effectiveMintJSONPath == "" {
-				effectiveMintJSONPath = "docs/mint.json"
-			}
-			mintFilePath := filepath.Join(deploymentDir, effectiveMintJSONPath)
+			mintFilePath := filepath.Join(deploymentDir, dep.DocsPath)
 			if _, err := os.Stat(mintFilePath); os.IsNotExist(err) {
 				_, err2 := db.Exec("UPDATE deployments SET status = ?, error = ? WHERE uuid = ?", "failed", "mint.json file not found", dep.UUID)
 				if err2 != nil {

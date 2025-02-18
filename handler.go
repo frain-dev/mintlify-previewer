@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/go-chi/chi/v5"
 	"html/template"
@@ -30,6 +31,12 @@ func createDeploymentHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
+	effectiveMintJSONPath, err := getValidDocsPath(req.DocsPath)
+	if err != nil {
+		http.Error(w, "Invalid docs path: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	req.DocsPath = effectiveMintJSONPath
 
 	dir, err := os.Getwd()
 	if err != nil {
@@ -58,8 +65,8 @@ func createDeploymentHandler(w http.ResponseWriter, r *http.Request) {
 	deployURL := fmt.Sprintf("http://%s:%d", dynamicHost, port)
 	reverseProxyURL := fmt.Sprintf("http://%s.%s", newUUID, r.Host)
 
-	_, err = db.Exec("INSERT INTO deployments (uuid, github_url, branch, deployment_url, deployment_proxy_url, status) VALUES (?, ?, ?, ?, ?, ?)",
-		newUUID, req.GitHubURL, req.Branch, deployURL, reverseProxyURL, "starting")
+	_, err = db.Exec("INSERT INTO deployments (uuid, github_url, branch, docs_path, deployment_url, deployment_proxy_url, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
+		newUUID, req.GitHubURL, req.Branch, req.DocsPath, deployURL, reverseProxyURL, "starting")
 	if err != nil {
 		log.Info("failed to create deployment:", err)
 		http.Error(w, "Database error", http.StatusInternalServerError)
@@ -87,12 +94,7 @@ func startProcessing(newUUID string, repoURL string, req Deployment, deploymentD
 			return
 		}
 
-		effectiveMintJSONPath := mintJSONPath
-		if effectiveMintJSONPath == "" {
-			effectiveMintJSONPath = "docs/mint.json"
-		}
-
-		mintFilePath := filepath.Join(deploymentDir, effectiveMintJSONPath)
+		mintFilePath := filepath.Join(deploymentDir, req.DocsPath)
 		if _, err := os.Stat(mintFilePath); os.IsNotExist(err) {
 			_, _ = db.Exec("UPDATE deployments SET status = ?, error = ? WHERE uuid = ?", "failed", "mint.json file not found", newUUID)
 			return
@@ -102,6 +104,16 @@ func startProcessing(newUUID string, repoURL string, req Deployment, deploymentD
 
 		startMintlifyDev(newUUID, port, serverDir)
 	}()
+}
+
+func getValidDocsPath(path string) (string, error) {
+	if path == "" {
+		return "", errors.New("docs_path cannot be empty")
+	}
+	if !strings.HasSuffix(path, ".json") {
+		return "", errors.New("docs_path must end with .json")
+	}
+	return path, nil
 }
 
 func getDeploymentHandler(w http.ResponseWriter, r *http.Request) {

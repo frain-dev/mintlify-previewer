@@ -3,6 +3,7 @@ CREATE TABLE IF NOT EXISTS deployments
     uuid                 TEXT PRIMARY KEY,
     github_url           TEXT,
     branch               TEXT,
+    docs_path TEXT DEFAULT 'mint.json',
     deployment_url       TEXT,
     deployment_proxy_url TEXT,
     status               TEXT,

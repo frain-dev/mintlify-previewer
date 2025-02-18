@@ -13,8 +13,6 @@ import (
 var activeServers = make(map[string]*os.Process)
 var mu sync.Mutex
 
-var mintJSONPath = os.Getenv("MINT_JSON_PATH")
-
 func ensureMintlifyInstalled() error {
 	if _, err := exec.LookPath("mintlify"); err != nil {
 		log.Errorln("Mintlify not found, installing...")
