@@ -59,10 +59,8 @@ func createDeploymentHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	hostParts := strings.Split(r.Host, ":")
-	dynamicHost := hostParts[0]
 	port := getUniquePort()
-	deployURL := fmt.Sprintf("http://%s:%d", dynamicHost, port)
+	deployURL := fmt.Sprintf("http://localhost:%d", port)
 	reverseProxyURL := fmt.Sprintf("http://%s.%s", newUUID, r.Host)
 
 	_, err = db.Exec("INSERT INTO deployments (uuid, github_url, branch, docs_path, deployment_url, deployment_proxy_url, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
