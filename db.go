@@ -2,37 +2,65 @@ package main
 
 import (
 	"database/sql"
-	"fmt"
+	"errors"
+	"github.com/golang-migrate/migrate/v4"
+	"github.com/golang-migrate/migrate/v4/database/sqlite3"
 	"mintlify-previewer-backend/log"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	_ "github.com/golang-migrate/migrate/v4/source/file"
+	_ "github.com/mattn/go-sqlite3"
 )
+
+type Deployment struct {
+	UUID      string `json:"uuid"`
+	GitHubURL string `json:"github_url"`
+	Branch    string `json:"branch"`
+	DocsPath  string `json:"docs_path"`
+	DeployURL string `json:"deployment_url"`
+	Status    string `json:"status"`
+}
 
 var db *sql.DB
 
 func initDB() {
 	var err error
-	db, err = sql.Open("sqlite3", "./deployments.db")
+	dbPath := "./.sqlite/deployments.db"
+	dir := "./.sqlite"
+
+	if err := os.MkdirAll(dir, os.ModePerm); err != nil {
+		log.Fatal("failed to create database directory: ", err)
+	}
+
+	db, err = sql.Open("sqlite3", dbPath)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal("failed to open database: ", err)
 	}
 
-	query := `CREATE TABLE IF NOT EXISTS deployments (
-		uuid TEXT PRIMARY KEY,
-		github_url TEXT,
-		branch TEXT,
-		deployment_url TEXT,
-		deployment_proxy_url TEXT,
-		status TEXT,
-		error TEXT
-	)`
-
-	if _, err = db.Exec(query); err != nil {
-		log.Fatal(err)
+	driver, err := sqlite3.WithInstance(db, &sqlite3.Config{})
+	if err != nil {
+		log.Fatal("failed to create SQLite driver instance: ", err)
 	}
+
+	m, err := migrate.NewWithDatabaseInstance(
+		"file://migrations",
+		"sqlite",
+		driver,
+	)
+	if err != nil {
+		log.Fatal("failed to create migration instance: ", err)
+	}
+
+	err = m.Up()
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		log.Fatal("failed to apply migrations: ", err)
+	}
+
+	log.Info("Migrations applied successfully!")
 }
 
 func restoreDeployments() {
@@ -43,15 +71,20 @@ func restoreDeployments() {
 		return
 	}
 
-	rows, err := db.Query("SELECT uuid, github_url, branch, deployment_url, status FROM deployments WHERE status IN ('running', 'starting')")
+	rows, err := db.Query("SELECT uuid, github_url, branch, docs_path, deployment_url, status FROM deployments WHERE status IN ('running', 'starting')")
 	if err != nil {
 		log.Fatalf("Failed to query deployments: %v", err)
 	}
-	defer rows.Close()
+	defer func(rows *sql.Rows) {
+		err2 := rows.Close()
+		if err2 != nil {
+			log.Error("Failed to close rows: ", err2)
+		}
+	}(rows)
 
 	for rows.Next() {
 		var dep Deployment
-		if err := rows.Scan(&dep.UUID, &dep.GitHubURL, &dep.Branch, &dep.DeployURL, &dep.Status); err != nil {
+		if err := rows.Scan(&dep.UUID, &dep.GitHubURL, &dep.Branch, &dep.DocsPath, &dep.DeployURL, &dep.Status); err != nil {
 			log.Infof("Failed to scan deployment: %v", err)
 			return
 		}
@@ -66,7 +99,7 @@ func restoreDeployments() {
 				_, repoURL := extractPRID(dep.GitHubURL)
 				if out, err := cloneRepo(repoURL, dep.Branch, deploymentDir); err != nil {
 					log.Infof("Failed to clone repository for UUID %s: %v", dep.UUID, out)
-					_, err2 := db.Exec("UPDATE deployments SET status = ?, error = ? WHERE uuid = ?", "failed", fmt.Sprintf("Failed to clone repository: %v", out), dep.UUID)
+					_, err2 := db.Exec("UPDATE deployments SET status = ?, error = ? WHERE uuid = ?", "failed", err.Error(), dep.UUID)
 					if err2 != nil {
 						log.Infof("Failed to update status for UUID %s: %v for error %+v", dep.UUID, err2, err)
 					}
@@ -74,11 +107,7 @@ func restoreDeployments() {
 				}
 			}
 
-			effectiveMintJSONPath := mintJSONPath
-			if effectiveMintJSONPath == "" {
-				effectiveMintJSONPath = "docs/mint.json"
-			}
-			mintFilePath := filepath.Join(deploymentDir, effectiveMintJSONPath)
+			mintFilePath := filepath.Join(deploymentDir, dep.DocsPath)
 			if _, err := os.Stat(mintFilePath); os.IsNotExist(err) {
 				_, err2 := db.Exec("UPDATE deployments SET status = ?, error = ? WHERE uuid = ?", "failed", "mint.json file not found", dep.UUID)
 				if err2 != nil {

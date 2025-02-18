@@ -20,6 +20,9 @@
 *.db
 
 .repos
+.sqlite
+.repo_data
+.sqlite_data
 
 # ui depencencies
 **/node_modules

@@ -8,14 +8,6 @@ import (
 	"os"
 )
 
-type Deployment struct {
-	UUID      string `json:"uuid"`
-	GitHubURL string `json:"github_url"`
-	Branch    string `json:"branch"`
-	DeployURL string `json:"deployment_url"`
-	Status    string `json:"status"`
-}
-
 func main() {
 	initDB()
 	restoreDeployments()

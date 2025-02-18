@@ -1,0 +1,11 @@
+version: "3.8"
+
+services:
+  mintlify-previewer:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./.sqlite_data:/root/.sqlite
+      - ./.repo_data:/root/.repos
+    restart: unless-stopped

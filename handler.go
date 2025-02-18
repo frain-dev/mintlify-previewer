@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/go-chi/chi/v5"
 	"html/template"
@@ -30,6 +31,12 @@ func createDeploymentHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
+	effectiveMintJSONPath, err := getValidDocsPath(req.DocsPath)
+	if err != nil {
+		http.Error(w, "Invalid docs path: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	req.DocsPath = effectiveMintJSONPath
 
 	dir, err := os.Getwd()
 	if err != nil {
@@ -58,8 +65,8 @@ func createDeploymentHandler(w http.ResponseWriter, r *http.Request) {
 	deployURL := fmt.Sprintf("http://%s:%d", dynamicHost, port)
 	reverseProxyURL := fmt.Sprintf("http://%s.%s", newUUID, r.Host)
 
-	_, err = db.Exec("INSERT INTO deployments (uuid, github_url, branch, deployment_url, deployment_proxy_url, status) VALUES (?, ?, ?, ?, ?, ?)",
-		newUUID, req.GitHubURL, req.Branch, deployURL, reverseProxyURL, "starting")
+	_, err = db.Exec("INSERT INTO deployments (uuid, github_url, branch, docs_path, deployment_url, deployment_proxy_url, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
+		newUUID, req.GitHubURL, req.Branch, req.DocsPath, deployURL, reverseProxyURL, "starting")
 	if err != nil {
 		log.Info("failed to create deployment:", err)
 		http.Error(w, "Database error", http.StatusInternalServerError)
@@ -68,7 +75,10 @@ func createDeploymentHandler(w http.ResponseWriter, r *http.Request) {
 
 	response := Deployment{UUID: newUUID, GitHubURL: req.GitHubURL, Branch: req.Branch, DeployURL: reverseProxyURL, Status: "starting"}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	err = json.NewEncoder(w).Encode(response)
+	if err != nil {
+		log.Errorf("Failed to encode response: %v", err)
+	}
 
 	startProcessing(newUUID, repoURL, req, deploymentDir, port)
 }
@@ -81,17 +91,13 @@ func startProcessing(newUUID string, repoURL string, req Deployment, deploymentD
 			return
 		}
 
-		if out, err := cloneRepo(repoURL, req.Branch, deploymentDir); err != nil {
-			_, _ = db.Exec("UPDATE deployments SET status = ?, error = ? WHERE uuid = ?", "failed", out, newUUID)
+		if _, err := cloneRepo(repoURL, req.Branch, deploymentDir); err != nil {
+			log.Errorln(err)
+			_, _ = db.Exec("UPDATE deployments SET status = ?, error = ? WHERE uuid = ?", "failed", err.Error(), newUUID)
 			return
 		}
 
-		effectiveMintJSONPath := mintJSONPath
-		if effectiveMintJSONPath == "" {
-			effectiveMintJSONPath = "docs/mint.json"
-		}
-
-		mintFilePath := filepath.Join(deploymentDir, effectiveMintJSONPath)
+		mintFilePath := filepath.Join(deploymentDir, req.DocsPath)
 		if _, err := os.Stat(mintFilePath); os.IsNotExist(err) {
 			_, _ = db.Exec("UPDATE deployments SET status = ?, error = ? WHERE uuid = ?", "failed", "mint.json file not found", newUUID)
 			return
@@ -103,6 +109,16 @@ func startProcessing(newUUID string, repoURL string, req Deployment, deploymentD
 	}()
 }
 
+func getValidDocsPath(path string) (string, error) {
+	if path == "" {
+		return "", errors.New("docs_path cannot be empty")
+	}
+	if !strings.HasSuffix(path, ".json") {
+		return "", errors.New("docs_path must end with .json")
+	}
+	return path, nil
+}
+
 func getDeploymentHandler(w http.ResponseWriter, r *http.Request) {
 	uuidParam := chi.URLParam(r, "uuid")
 	var dep Deployment
@@ -110,7 +126,7 @@ func getDeploymentHandler(w http.ResponseWriter, r *http.Request) {
 	err := db.QueryRow("SELECT  uuid, github_url, branch, deployment_proxy_url as deployment_url, status FROM deployments WHERE uuid = ?",
 		uuidParam).Scan(&dep.UUID, &dep.GitHubURL, &dep.Branch, &dep.DeployURL, &dep.Status)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			http.Error(w, "Deployment not found", http.StatusNotFound)
 			return
 		}
@@ -120,7 +136,10 @@ func getDeploymentHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(dep)
+	err = json.NewEncoder(w).Encode(dep)
+	if err != nil {
+		log.Error("Failed to encode response:", err)
+	}
 }
 
 func getUniquePort() int {
@@ -128,7 +147,10 @@ func getUniquePort() int {
 		port := 5000 + rand.Intn(1000)
 		ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 		if err == nil {
-			ln.Close()
+			err2 := ln.Close()
+			if err2 != nil {
+				log.Error("Failed to close listener:", err2)
+			}
 			return port
 		}
 	}
@@ -160,7 +182,10 @@ func deleteDeploymentHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, "Mintlify server for UUID %s stopped", uuid)
+	_, err = fmt.Fprintf(w, "Mintlify server for UUID %s stopped", uuid)
+	if err != nil {
+		log.Error("Failed to write response:", err)
+	}
 }
 
 func proxyOrShowStatus(w http.ResponseWriter, r *http.Request) {
@@ -263,5 +288,8 @@ func proxyOrShowStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tmpl.Execute(w, data)
+	err = tmpl.Execute(w, data)
+	if err != nil {
+		log.Error("Failed to load template:", err)
+	}
 }

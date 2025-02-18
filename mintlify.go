@@ -13,8 +13,6 @@ import (
 var activeServers = make(map[string]*os.Process)
 var mu sync.Mutex
 
-var mintJSONPath = os.Getenv("MINT_JSON_PATH")
-
 func ensureMintlifyInstalled() error {
 	if _, err := exec.LookPath("mintlify"); err != nil {
 		log.Errorln("Mintlify not found, installing...")
@@ -41,9 +39,15 @@ func startMintlifyDev(uuid string, port int, dir string) {
 	mu.Unlock()
 
 	log.Infof("Mintlify running for UUID %s on port %d", uuid, port)
-	_, _ = db.Exec("UPDATE deployments SET status = ? WHERE uuid = ?", "running", uuid)
+	_, err := db.Exec("UPDATE deployments SET status = ? WHERE uuid = ?", "running", uuid)
+	if err != nil {
+		log.Errorf("Failed to update running status: %v", err)
+	}
 
-	cmd.Wait()
+	err = cmd.Wait()
+	if err != nil {
+		log.Errorf("Failed to start Mintlify: %v", err)
+	}
 
 	mu.Lock()
 	delete(activeServers, uuid)
