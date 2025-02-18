@@ -65,7 +65,7 @@ func cloneRepo(repoURL, branch, dir string) (string, error) {
 
 	// Wait for the command to finish
 	if err := cmd.Wait(); err != nil {
-		return "", fmt.Errorf("failed to clone repo %s on branch %s: %w", repoURL, branch, err)
+		return err.Error(), fmt.Errorf("failed to clone repo %s on branch %s: %w", repoURL, branch, err)
 	}
 
 	log.Info("Repository cloned successfully")

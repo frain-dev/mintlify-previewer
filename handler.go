@@ -81,8 +81,9 @@ func startProcessing(newUUID string, repoURL string, req Deployment, deploymentD
 			return
 		}
 
-		if out, err := cloneRepo(repoURL, req.Branch, deploymentDir); err != nil {
-			_, _ = db.Exec("UPDATE deployments SET status = ?, error = ? WHERE uuid = ?", "failed", out, newUUID)
+		if _, err := cloneRepo(repoURL, req.Branch, deploymentDir); err != nil {
+			log.Errorln(err)
+			_, _ = db.Exec("UPDATE deployments SET status = ?, error = ? WHERE uuid = ?", "failed", err.Error(), newUUID)
 			return
 		}
 
