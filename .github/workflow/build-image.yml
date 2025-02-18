@@ -50,7 +50,7 @@ jobs:
           export CGO_ENABLED=0
           export GOOS=linux
           export GOARCH=${{ matrix.arch }}
-          go build -o convoy ./cmd
+          go build -o server .
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
