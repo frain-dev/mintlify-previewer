@@ -75,7 +75,12 @@ func restoreDeployments() {
 	if err != nil {
 		log.Fatalf("Failed to query deployments: %v", err)
 	}
-	defer rows.Close()
+	defer func(rows *sql.Rows) {
+		err2 := rows.Close()
+		if err2 != nil {
+			log.Error("Failed to close rows: ", err2)
+		}
+	}(rows)
 
 	for rows.Next() {
 		var dep Deployment

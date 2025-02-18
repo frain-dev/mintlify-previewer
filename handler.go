@@ -75,7 +75,10 @@ func createDeploymentHandler(w http.ResponseWriter, r *http.Request) {
 
 	response := Deployment{UUID: newUUID, GitHubURL: req.GitHubURL, Branch: req.Branch, DeployURL: reverseProxyURL, Status: "starting"}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	err = json.NewEncoder(w).Encode(response)
+	if err != nil {
+		log.Errorf("Failed to encode response: %v", err)
+	}
 
 	startProcessing(newUUID, repoURL, req, deploymentDir, port)
 }
@@ -123,7 +126,7 @@ func getDeploymentHandler(w http.ResponseWriter, r *http.Request) {
 	err := db.QueryRow("SELECT  uuid, github_url, branch, deployment_proxy_url as deployment_url, status FROM deployments WHERE uuid = ?",
 		uuidParam).Scan(&dep.UUID, &dep.GitHubURL, &dep.Branch, &dep.DeployURL, &dep.Status)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			http.Error(w, "Deployment not found", http.StatusNotFound)
 			return
 		}
@@ -133,7 +136,10 @@ func getDeploymentHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(dep)
+	err = json.NewEncoder(w).Encode(dep)
+	if err != nil {
+		log.Error("Failed to encode response:", err)
+	}
 }
 
 func getUniquePort() int {
@@ -141,7 +147,10 @@ func getUniquePort() int {
 		port := 5000 + rand.Intn(1000)
 		ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 		if err == nil {
-			ln.Close()
+			err2 := ln.Close()
+			if err2 != nil {
+				log.Error("Failed to close listener:", err2)
+			}
 			return port
 		}
 	}
@@ -173,7 +182,10 @@ func deleteDeploymentHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, "Mintlify server for UUID %s stopped", uuid)
+	_, err = fmt.Fprintf(w, "Mintlify server for UUID %s stopped", uuid)
+	if err != nil {
+		log.Error("Failed to write response:", err)
+	}
 }
 
 func proxyOrShowStatus(w http.ResponseWriter, r *http.Request) {
@@ -276,5 +288,8 @@ func proxyOrShowStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tmpl.Execute(w, data)
+	err = tmpl.Execute(w, data)
+	if err != nil {
+		log.Error("Failed to load template:", err)
+	}
 }
