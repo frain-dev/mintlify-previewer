@@ -44,7 +44,7 @@ func createDeploymentHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	newUUID := ulid.Make().String()
+	newUUID := strings.ToLower(ulid.Make().String())
 	req.UUID = newUUID
 
 	deploymentDir := filepath.Join(dir, ".repos", req.UUID)
@@ -61,7 +61,7 @@ func createDeploymentHandler(w http.ResponseWriter, r *http.Request) {
 
 	port := getUniquePort()
 	deployURL := fmt.Sprintf("http://localhost:%d", port)
-	reverseProxyURL := fmt.Sprintf("http://%s.%s", newUUID, r.Host)
+	reverseProxyURL := fmt.Sprintf("https://%s.%s", newUUID, r.Host)
 
 	_, err = db.Exec("INSERT INTO deployments (uuid, github_url, branch, docs_path, deployment_url, deployment_proxy_url, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
 		newUUID, req.GitHubURL, req.Branch, req.DocsPath, deployURL, reverseProxyURL, "starting")
