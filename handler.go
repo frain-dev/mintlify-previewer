@@ -193,7 +193,7 @@ func proxyOrShowStatus(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid hostname", http.StatusBadRequest)
 		return
 	}
-	uuid := strings.ToUpper(hostParts[0]) // Extract UUID
+	uuid := strings.ToLower(hostParts[0]) // Extract UUID
 
 	var status string
 	var deploymentUrl string
