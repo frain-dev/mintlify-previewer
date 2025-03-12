@@ -19,6 +19,7 @@ import (
 type Deployment struct {
 	UUID      string `json:"uuid"`
 	GitHubURL string `json:"github_url"`
+	// Deprecated
 	Branch    string `json:"branch"`
 	DocsPath  string `json:"docs_path"`
 	DeployURL string `json:"deployment_url"`
@@ -96,8 +97,8 @@ func restoreDeployments() {
 			// Check if the deployment directory exists and is not empty (except for Git files)
 			if isEmptyOrOnlyGitFiles(deploymentDir) {
 				log.Infof("Repository not cloned or incomplete for UUID %s. Cloning now...", dep.UUID)
-				_, repoURL := extractPRID(dep.GitHubURL)
-				if out, err := cloneRepo(repoURL, dep.Branch, deploymentDir); err != nil {
+				prNumber, repoURL := extractPRID(dep.GitHubURL)
+				if out, err := cloneRepo(repoURL, prNumber, deploymentDir); err != nil {
 					log.Infof("Failed to clone repository for UUID %s: %v", dep.UUID, out)
 					_, err2 := db.Exec("UPDATE deployments SET status = ?, error = ? WHERE uuid = ?", "failed", err.Error(), dep.UUID)
 					if err2 != nil {

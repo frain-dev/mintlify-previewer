@@ -8,44 +8,63 @@ import (
 )
 
 // checkRepoExists checks if the repository exists and is accessible
-func checkRepoExists(repoURL, branch string) error {
-	cmd := exec.Command("git", "ls-remote", "--heads", repoURL, branch)
+func checkRepoExists(repoURL, prNumber string) error {
+	prRef := fmt.Sprintf("refs/pull/%s/head", prNumber)
+	cmd := exec.Command("git", "ls-remote", "--exit-code", repoURL, prRef)
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("repository check failed: %v, output: %s", err, string(output))
 	}
 
-	// If the branch exists, the output will contain the branch reference
-	if len(output) == 0 {
-		return fmt.Errorf("branch %s not found in repository", branch)
-	}
-
+	log.Info("PR exists: " + prNumber)
 	return nil
 }
 
 // cloneRepo clones the repository
-func cloneRepo(repoURL, branch, dir string) (string, error) {
-	log.Info("About to clone repo. Repo url is " + repoURL)
+func cloneRepo(repoURL, prNumber, dir string) (string, error) {
+	log.Info("About to clone repo. Repo URL: " + repoURL)
 
-	cmd := exec.Command("git", "clone", "--depth", "1", "--branch", branch, repoURL, dir)
+	// Clone the repository
+	cmd := exec.Command("git", "clone", repoURL, dir)
+	if err := runCommandWithPipe(cmd); err != nil {
+		return "", fmt.Errorf("failed to clone repo: %w", err)
+	}
 
+	// Fetch the PR branch into a temporary branch
+	prBranch := "pr-" + prNumber
+	cmd = exec.Command("git", "-C", dir, "fetch", "origin", "pull/"+prNumber+"/head:"+prBranch)
+	if err := runCommandWithPipe(cmd); err != nil {
+		return "", fmt.Errorf("failed to fetch PR branch: %w", err)
+	}
+
+	// Checkout the fetched PR branch
+	cmd = exec.Command("git", "-C", dir, "checkout", prBranch)
+	if err := runCommandWithPipe(cmd); err != nil {
+		return "", fmt.Errorf("failed to checkout PR branch: %w", err)
+	}
+
+	log.Info("Repository cloned and PR branch checked out successfully: " + prBranch)
+	return "", nil
+}
+
+func runCommandWithPipe(cmd *exec.Cmd) error {
 	// Create pipes for stdout and stderr
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
-		return "", fmt.Errorf("failed to create stdout pipe: %w", err)
+		return fmt.Errorf("failed to create stdout pipe: %w", err)
 	}
 	stderrPipe, err := cmd.StderrPipe()
 	if err != nil {
-		return "", fmt.Errorf("failed to create stderr pipe: %w", err)
+		return fmt.Errorf("failed to create stderr pipe: %w", err)
 	}
 
 	// Start the command
 	if err := cmd.Start(); err != nil {
-		return "", fmt.Errorf("failed to start command: %w", err)
+		return fmt.Errorf("failed to start command: %w", err)
 	}
 
-	// Create a scanner to read stdout and stderr line by line
+	// Create scanners to read stdout and stderr
 	stdoutScanner := bufio.NewScanner(stdoutPipe)
 	stderrScanner := bufio.NewScanner(stderrPipe)
 
@@ -59,15 +78,14 @@ func cloneRepo(repoURL, branch, dir string) (string, error) {
 	// Log stderr in real-time
 	go func() {
 		for stderrScanner.Scan() {
-			log.Info(stderrScanner.Text())
+			log.Warn(stderrScanner.Text())
 		}
 	}()
 
 	// Wait for the command to finish
 	if err := cmd.Wait(); err != nil {
-		return err.Error(), fmt.Errorf("failed to clone repo %s on branch %s: %w", repoURL, branch, err)
+		return fmt.Errorf("command failed: %w", err)
 	}
 
-	log.Info("Repository cloned successfully")
-	return "", nil
+	return nil
 }
