@@ -53,8 +53,8 @@ func createDeploymentHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, repoURL := extractPRID(req.GitHubURL)
-	if err := checkRepoExists(repoURL, req.Branch); err != nil {
+	prID, repoURL := extractPRID(req.GitHubURL)
+	if err := checkRepoExists(repoURL, prID); err != nil {
 		http.Error(w, fmt.Sprintf("Repository check failed: %v", err), http.StatusInternalServerError)
 		return
 	}
@@ -78,10 +78,10 @@ func createDeploymentHandler(w http.ResponseWriter, r *http.Request) {
 		log.Errorf("Failed to encode response: %v", err)
 	}
 
-	startProcessing(newUUID, repoURL, req, deploymentDir, port)
+	startProcessing(newUUID, repoURL, prID, req, deploymentDir, port)
 }
 
-func startProcessing(newUUID string, repoURL string, req Deployment, deploymentDir string, port int) {
+func startProcessing(newUUID string, repoURL string, prNumber string, req Deployment, deploymentDir string, port int) {
 	go func() {
 		if err := ensureMintlifyInstalled(); err != nil {
 			log.Infof("Failed to install Mintlify: %v", err)
@@ -89,7 +89,7 @@ func startProcessing(newUUID string, repoURL string, req Deployment, deploymentD
 			return
 		}
 
-		if _, err := cloneRepo(repoURL, req.Branch, deploymentDir); err != nil {
+		if _, err := cloneRepo(repoURL, prNumber, deploymentDir); err != nil {
 			log.Errorln(err)
 			_, _ = db.Exec("UPDATE deployments SET status = ?, error = ? WHERE uuid = ?", "failed", err.Error(), newUUID)
 			return
