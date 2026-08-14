@@ -62,6 +62,10 @@ func startMintlifyDev(uuid string, port int, dir string) {
 
 	log.Infof("Mintlify running for UUID %s on port %d", uuid, port)
 	ok, err := setStatusIfActive(db, uuid, "running")
+	for i := 0; err != nil && i < 3; i++ {
+		time.Sleep(50 * time.Millisecond)
+		ok, err = setStatusIfActive(db, uuid, "running")
+	}
 	if err != nil {
 		// Unknown is not cancelled: keep the process we just started.
 		log.Errorf("Failed to mark running for %s: %v", uuid, err)
@@ -123,7 +127,7 @@ func waitProcessGone(server *trackedServer, d time.Duration) {
 	pid := server.proc.Pid
 	deadline := time.Now().Add(d)
 	for {
-		_ = processReaped(pid)
+		reapZombieChildren()
 		if processGroupGone(server.pgid, pid) {
 			return
 		}
@@ -139,13 +143,13 @@ func waitProcessGone(server *trackedServer, d time.Duration) {
 	}
 	deadline = time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
-		_ = processReaped(pid)
+		reapZombieChildren()
 		if processGroupGone(server.pgid, pid) {
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	_ = processReaped(pid)
+	reapZombieChildren()
 }
 
 func processGroupGone(pgid, leaderPid int) bool {
@@ -163,4 +167,14 @@ func processReaped(pid int) bool {
 		return true
 	}
 	return wpid == pid
+}
+
+func reapZombieChildren() {
+	for {
+		var status syscall.WaitStatus
+		wpid, err := syscall.Wait4(-1, &status, syscall.WNOHANG, nil)
+		if err != nil || wpid <= 0 {
+			return
+		}
+	}
 }

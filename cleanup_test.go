@@ -244,6 +244,22 @@ func TestWaitInflightBlocksUntilEnd(t *testing.T) {
 	}
 }
 
+func TestCloneIfActiveAbortsStopped(t *testing.T) {
+	database := testDB(t)
+	root := filepath.Join(t.TempDir(), ".repos")
+	dir := mkdirPreview(t, root, "gone")
+	insertDeployment(t, database, "gone", "starting", "datetime('now')")
+	markDeploymentStopped(database, "gone")
+
+	aborted, err := cloneIfActive(database, "gone", "https://example.com/x.git", "main", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !aborted {
+		t.Fatal("stopped row should abort before clone")
+	}
+}
+
 func TestWaitInflightTimesOut(t *testing.T) {
 	const uuid = "inflight-timeout"
 	beginInflight(uuid)

@@ -82,6 +82,16 @@ func createDeploymentHandler(w http.ResponseWriter, r *http.Request) {
 	startProcessing(newUUID, repoURL, req, deploymentDir, port)
 }
 
+func cloneIfActive(database *sql.DB, uuid, repoURL, branch, dir string) (bool, error) {
+	beginInflight(uuid)
+	defer endInflight(uuid)
+	if abortStartIfInactive(database, uuid, dir) {
+		return true, nil
+	}
+	_, err := cloneRepo(repoURL, branch, dir)
+	return false, err
+}
+
 func abortStartIfInactive(database *sql.DB, uuid, dir string) bool {
 	// A lookup error is unknown, not cancelled: stop starting more work
 	// but do not delete the clone.
@@ -108,15 +118,14 @@ func startProcessing(newUUID string, repoURL string, req Deployment, deploymentD
 			return
 		}
 
-		if abortStartIfInactive(db, newUUID, deploymentDir) {
+		aborted, err := cloneIfActive(db, newUUID, repoURL, req.Branch, deploymentDir)
+		if aborted {
 			return
 		}
-		beginInflight(newUUID)
-		_, err := cloneRepo(repoURL, req.Branch, deploymentDir)
-		endInflight(newUUID)
 		if err != nil {
 			log.Errorln(err)
 			_, _ = setFailedIfActive(db, newUUID, err.Error())
+			_ = abortStartIfInactive(db, newUUID, deploymentDir)
 			return
 		}
 

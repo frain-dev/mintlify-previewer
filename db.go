@@ -96,15 +96,14 @@ func restoreDeployments() {
 			if isEmptyOrOnlyGitFiles(deploymentDir) {
 				log.Infof("Repository not cloned or incomplete for UUID %s. Cloning now...", dep.UUID)
 				_, repoURL := extractPRID(dep.GitHubURL)
-				if abortStartIfInactive(db, dep.UUID, deploymentDir) {
+				aborted, err := cloneIfActive(db, dep.UUID, repoURL, dep.Branch, deploymentDir)
+				if aborted {
 					return
 				}
-				beginInflight(dep.UUID)
-				out, err := cloneRepo(repoURL, dep.Branch, deploymentDir)
-				endInflight(dep.UUID)
 				if err != nil {
-					log.Infof("Failed to clone repository for UUID %s: %v", dep.UUID, out)
+					log.Infof("Failed to clone repository for UUID %s: %v", dep.UUID, err)
 					_, _ = setFailedIfActive(db, dep.UUID, err.Error())
+					_ = abortStartIfInactive(db, dep.UUID, deploymentDir)
 					return
 				}
 			}
