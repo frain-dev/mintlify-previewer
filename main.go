@@ -10,6 +10,7 @@ import (
 
 func main() {
 	initDB()
+	startCleanupLoop()
 	restoreDeployments()
 
 	r := chi.NewRouter()

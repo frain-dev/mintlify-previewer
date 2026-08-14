@@ -55,6 +55,7 @@ func createDeploymentHandler(w http.ResponseWriter, r *http.Request) {
 
 	_, repoURL := extractPRID(req.GitHubURL)
 	if err := checkRepoExists(repoURL, req.Branch); err != nil {
+		_ = os.RemoveAll(deploymentDir)
 		http.Error(w, fmt.Sprintf("Repository check failed: %v", err), http.StatusInternalServerError)
 		return
 	}
@@ -81,28 +82,67 @@ func createDeploymentHandler(w http.ResponseWriter, r *http.Request) {
 	startProcessing(newUUID, repoURL, req, deploymentDir, port)
 }
 
+func cloneIfActive(database *sql.DB, uuid, repoURL, branch, dir string) (bool, error) {
+	beginInflight(uuid)
+	defer endInflight(uuid)
+	if abortStartIfInactive(database, uuid, dir) {
+		return true, nil
+	}
+	_, err := cloneRepo(repoURL, branch, dir)
+	return false, err
+}
+
+func abortStartIfInactive(database *sql.DB, uuid, dir string) bool {
+	// A lookup error is unknown, not cancelled: stop starting more work
+	// but do not delete the clone.
+	active, err := deploymentActive(database, uuid)
+	if err != nil {
+		log.Errorf("Failed to check deployment %s: %v", uuid, err)
+		return true
+	}
+	if active {
+		return false
+	}
+	_ = os.RemoveAll(dir)
+	return true
+}
+
 func startProcessing(newUUID string, repoURL string, req Deployment, deploymentDir string, port int) {
 	go func() {
+		if abortStartIfInactive(db, newUUID, deploymentDir) {
+			return
+		}
 		if err := ensureMintlifyInstalled(); err != nil {
 			log.Infof("Failed to install Mintlify: %v", err)
-			_, _ = db.Exec("UPDATE deployments SET status = ?, error = ? WHERE uuid = ?", "failed", err.Error(), newUUID)
+			_, _ = setFailedIfActive(db, newUUID, err.Error())
 			return
 		}
 
-		if _, err := cloneRepo(repoURL, req.Branch, deploymentDir); err != nil {
+		aborted, err := cloneIfActive(db, newUUID, repoURL, req.Branch, deploymentDir)
+		if aborted {
+			return
+		}
+		if err != nil {
 			log.Errorln(err)
-			_, _ = db.Exec("UPDATE deployments SET status = ?, error = ? WHERE uuid = ?", "failed", err.Error(), newUUID)
+			_, _ = setFailedIfActive(db, newUUID, err.Error())
+			_ = abortStartIfInactive(db, newUUID, deploymentDir)
 			return
 		}
 
+		if abortStartIfInactive(db, newUUID, deploymentDir) {
+			return
+		}
 		mintFilePath := filepath.Join(deploymentDir, req.DocsPath)
 		if _, err := os.Stat(mintFilePath); os.IsNotExist(err) {
-			_, _ = db.Exec("UPDATE deployments SET status = ?, error = ? WHERE uuid = ?", "failed", "mint.json file not found", newUUID)
+			_, _ = setFailedIfActive(db, newUUID, "mint.json file not found")
 			return
 		}
 
 		serverDir := filepath.Dir(mintFilePath)
 
+		if abortStartIfInactive(db, newUUID, deploymentDir) {
+			return
+		}
 		startMintlifyDev(newUUID, port, serverDir)
 	}()
 }
@@ -169,15 +209,18 @@ func extractPRID(githubURL string) (string, string) {
 func deleteDeploymentHandler(w http.ResponseWriter, r *http.Request) {
 	uuid := chi.URLParam(r, "uuid")
 
-	err := stopMintlifyServer(uuid)
+	var existing string
+	err := db.QueryRow("SELECT uuid FROM deployments WHERE uuid = ?", uuid).Scan(&existing)
 	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
-			http.Error(w, err.Error(), http.StatusNotFound)
-		} else {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "Deployment not found", http.StatusNotFound)
+			return
 		}
+		http.Error(w, "Database error", http.StatusInternalServerError)
 		return
 	}
+
+	teardownDeployment(db, reposRoot(), uuid)
 
 	w.WriteHeader(http.StatusOK)
 	_, err = fmt.Fprintf(w, "Mintlify server for UUID %s stopped", uuid)
