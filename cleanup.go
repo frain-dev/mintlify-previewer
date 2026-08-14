@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"mintlify-previewer-backend/log"
@@ -14,6 +15,40 @@ import (
 const previewTTL = 7 * 24 * time.Hour
 
 var removeAll = os.RemoveAll
+
+var inflightMu sync.Mutex
+var inflight = map[string]int{}
+
+func beginInflight(uuid string) {
+	inflightMu.Lock()
+	inflight[uuid]++
+	inflightMu.Unlock()
+}
+
+func endInflight(uuid string) {
+	inflightMu.Lock()
+	inflight[uuid]--
+	if inflight[uuid] <= 0 {
+		delete(inflight, uuid)
+	}
+	inflightMu.Unlock()
+}
+
+func waitInflight(uuid string, d time.Duration) bool {
+	deadline := time.Now().Add(d)
+	for {
+		inflightMu.Lock()
+		n := inflight[uuid]
+		inflightMu.Unlock()
+		if n == 0 {
+			return true
+		}
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
 
 const cleanupInterval = time.Hour
 
@@ -105,6 +140,11 @@ func teardownDeployment(database *sql.DB, root, uuid string) {
 	// Stop the row first so an in-flight start cannot write status=running
 	// after DELETE returns. deleted_at waits until the clone dir is gone.
 	markDeploymentStopped(database, uuid)
+	if !waitInflight(uuid, 30*time.Second) {
+		log.Errorf("Timed out waiting for in-flight work on %s; leaving clone for retry", uuid)
+		stopMintlifyProcess(uuid)
+		return
+	}
 	stopMintlifyProcess(uuid)
 	dir := filepath.Join(root, uuid)
 	if err := removeAll(dir); err != nil {

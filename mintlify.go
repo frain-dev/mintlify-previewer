@@ -30,7 +30,15 @@ func ensureMintlifyInstalled() error {
 }
 
 func startMintlifyDev(uuid string, port int, dir string) {
-	if !isDeploymentActive(db, uuid) {
+	beginInflight(uuid)
+	active, err := deploymentActive(db, uuid)
+	if err != nil {
+		endInflight(uuid)
+		log.Errorf("Failed to check deployment %s: %v", uuid, err)
+		return
+	}
+	if !active {
+		endInflight(uuid)
 		return
 	}
 
@@ -39,8 +47,9 @@ func startMintlifyDev(uuid string, port int, dir string) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	if err := cmd.Start(); err != nil {
+		endInflight(uuid)
 		log.Errorf("Failed to start Mintlify: %v", err)
-		setFailedIfActive(db, uuid, err.Error())
+		_, _ = setFailedIfActive(db, uuid, err.Error())
 		return
 	}
 
@@ -49,15 +58,20 @@ func startMintlifyDev(uuid string, port int, dir string) {
 	mu.Lock()
 	activeServers[uuid] = &trackedServer{proc: cmd.Process, pgid: cmd.Process.Pid}
 	mu.Unlock()
+	endInflight(uuid)
 
 	log.Infof("Mintlify running for UUID %s on port %d", uuid, port)
-	if !setStatusIfActive(db, uuid, "running") {
+	ok, err := setStatusIfActive(db, uuid, "running")
+	if err != nil {
+		// Unknown is not cancelled: keep the process we just started.
+		log.Errorf("Failed to mark running for %s: %v", uuid, err)
+	} else if !ok {
 		stopMintlifyProcess(uuid)
+		_ = cmd.Wait()
 		return
 	}
 
-	err := cmd.Wait()
-	if err != nil {
+	if err := cmd.Wait(); err != nil {
 		log.Errorf("Failed to start Mintlify: %v", err)
 	}
 
@@ -109,7 +123,8 @@ func waitProcessGone(server *trackedServer, d time.Duration) {
 	pid := server.proc.Pid
 	deadline := time.Now().Add(d)
 	for {
-		if processReaped(pid) {
+		_ = processReaped(pid)
+		if processGroupGone(server.pgid, pid) {
 			return
 		}
 		if !time.Now().Before(deadline) {
@@ -117,18 +132,28 @@ func waitProcessGone(server *trackedServer, d time.Duration) {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	if server.pgid > 0 {
+	if server.pgid > 0 && !processGroupGone(server.pgid, pid) {
 		_ = syscall.Kill(-server.pgid, syscall.SIGKILL)
-	} else {
+	} else if server.pgid <= 0 {
 		_ = server.proc.Signal(syscall.SIGKILL)
 	}
 	deadline = time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
-		if processReaped(pid) {
+		_ = processReaped(pid)
+		if processGroupGone(server.pgid, pid) {
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
+	_ = processReaped(pid)
+}
+
+func processGroupGone(pgid, leaderPid int) bool {
+	if pgid <= 0 {
+		return processReaped(leaderPid)
+	}
+	err := syscall.Kill(-pgid, 0)
+	return err == syscall.ESRCH
 }
 
 func processReaped(pid int) bool {

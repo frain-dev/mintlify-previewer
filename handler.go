@@ -82,8 +82,15 @@ func createDeploymentHandler(w http.ResponseWriter, r *http.Request) {
 	startProcessing(newUUID, repoURL, req, deploymentDir, port)
 }
 
-func abortStartIfInactive(uuid, dir string) bool {
-	if isDeploymentActive(db, uuid) {
+func abortStartIfInactive(database *sql.DB, uuid, dir string) bool {
+	// A lookup error is unknown, not cancelled: stop starting more work
+	// but do not delete the clone.
+	active, err := deploymentActive(database, uuid)
+	if err != nil {
+		log.Errorf("Failed to check deployment %s: %v", uuid, err)
+		return true
+	}
+	if active {
 		return false
 	}
 	_ = os.RemoveAll(dir)
@@ -92,36 +99,39 @@ func abortStartIfInactive(uuid, dir string) bool {
 
 func startProcessing(newUUID string, repoURL string, req Deployment, deploymentDir string, port int) {
 	go func() {
-		if abortStartIfInactive(newUUID, deploymentDir) {
+		if abortStartIfInactive(db, newUUID, deploymentDir) {
 			return
 		}
 		if err := ensureMintlifyInstalled(); err != nil {
 			log.Infof("Failed to install Mintlify: %v", err)
-			setFailedIfActive(db, newUUID, err.Error())
+			_, _ = setFailedIfActive(db, newUUID, err.Error())
 			return
 		}
 
-		if abortStartIfInactive(newUUID, deploymentDir) {
+		if abortStartIfInactive(db, newUUID, deploymentDir) {
 			return
 		}
-		if _, err := cloneRepo(repoURL, req.Branch, deploymentDir); err != nil {
+		beginInflight(newUUID)
+		_, err := cloneRepo(repoURL, req.Branch, deploymentDir)
+		endInflight(newUUID)
+		if err != nil {
 			log.Errorln(err)
-			setFailedIfActive(db, newUUID, err.Error())
+			_, _ = setFailedIfActive(db, newUUID, err.Error())
 			return
 		}
 
-		if abortStartIfInactive(newUUID, deploymentDir) {
+		if abortStartIfInactive(db, newUUID, deploymentDir) {
 			return
 		}
 		mintFilePath := filepath.Join(deploymentDir, req.DocsPath)
 		if _, err := os.Stat(mintFilePath); os.IsNotExist(err) {
-			setFailedIfActive(db, newUUID, "mint.json file not found")
+			_, _ = setFailedIfActive(db, newUUID, "mint.json file not found")
 			return
 		}
 
 		serverDir := filepath.Dir(mintFilePath)
 
-		if abortStartIfInactive(newUUID, deploymentDir) {
+		if abortStartIfInactive(db, newUUID, deploymentDir) {
 			return
 		}
 		startMintlifyDev(newUUID, port, serverDir)
