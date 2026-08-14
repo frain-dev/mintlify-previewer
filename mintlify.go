@@ -9,7 +9,12 @@ import (
 	"syscall"
 )
 
-var activeServers = make(map[string]*os.Process)
+type trackedServer struct {
+	proc *os.Process
+	pgid int
+}
+
+var activeServers = make(map[string]*trackedServer)
 var mu sync.Mutex
 
 func ensureMintlifyInstalled() error {
@@ -34,8 +39,10 @@ func startMintlifyDev(uuid string, port int, dir string) {
 		return
 	}
 
+	// Setpgid makes the child's pid the new process group. Record it now so
+	// teardown never Getpgid's a pid that may have been reused.
 	mu.Lock()
-	activeServers[uuid] = cmd.Process
+	activeServers[uuid] = &trackedServer{proc: cmd.Process, pgid: cmd.Process.Pid}
 	mu.Unlock()
 
 	log.Infof("Mintlify running for UUID %s on port %d", uuid, port)
@@ -56,7 +63,7 @@ func startMintlifyDev(uuid string, port int, dir string) {
 
 func stopMintlifyProcess(uuid string) {
 	mu.Lock()
-	process, exists := activeServers[uuid]
+	server, exists := activeServers[uuid]
 	if exists {
 		delete(activeServers, uuid)
 	}
@@ -66,15 +73,25 @@ func stopMintlifyProcess(uuid string) {
 		return
 	}
 
-	if err := killProcessGroup(process); err != nil {
+	if err := killProcessGroup(server); err != nil {
 		log.Errorf("Failed to stop Mintlify server for %s: %v", uuid, err)
 	}
 }
 
-func killProcessGroup(process *os.Process) error {
-	pgid, err := syscall.Getpgid(process.Pid)
-	if err == nil {
-		return syscall.Kill(-pgid, syscall.SIGTERM)
+func killProcessGroup(server *trackedServer) error {
+	if server == nil || server.proc == nil {
+		return nil
 	}
-	return process.Signal(syscall.SIGTERM)
+	// Fail closed on strangers: if this pid is already gone, do not signal a
+	// process group that may now belong to an unrelated process.
+	if err := server.proc.Signal(syscall.Signal(0)); err != nil {
+		return nil
+	}
+	if server.pgid > 0 {
+		if err := syscall.Kill(-server.pgid, syscall.SIGTERM); err != nil {
+			return server.proc.Signal(syscall.SIGTERM)
+		}
+		return nil
+	}
+	return server.proc.Signal(syscall.SIGTERM)
 }
