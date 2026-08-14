@@ -114,3 +114,82 @@ func TestExpireDeploymentsRemovesOldAndFailed(t *testing.T) {
 		t.Fatalf("fresh row mutated: status=%s deleted=%v", freshStatus, freshDeleted.Valid)
 	}
 }
+
+func TestSetStatusIfActiveIgnoresStopped(t *testing.T) {
+	database := testDB(t)
+	insertDeployment(t, database, "live", "starting", "datetime('now')")
+	insertDeployment(t, database, "gone", "starting", "datetime('now')")
+	markDeploymentStopped(database, "gone")
+
+	if !isDeploymentActive(database, "live") {
+		t.Fatal("starting row should be active")
+	}
+	if isDeploymentActive(database, "gone") {
+		t.Fatal("stopped row should not be active")
+	}
+	if !setStatusIfActive(database, "live", "running") {
+		t.Fatal("starting row should accept running")
+	}
+	if setStatusIfActive(database, "gone", "running") {
+		t.Fatal("stopped row must not accept running")
+	}
+	if setFailedIfActive(database, "gone", "clone failed") {
+		t.Fatal("stopped row must not accept failed")
+	}
+
+	var liveStatus, goneStatus string
+	if err := database.QueryRow(`SELECT status FROM deployments WHERE uuid = ?`, "live").Scan(&liveStatus); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRow(`SELECT status FROM deployments WHERE uuid = ?`, "gone").Scan(&goneStatus); err != nil {
+		t.Fatal(err)
+	}
+	if liveStatus != "running" {
+		t.Fatalf("live status=%s", liveStatus)
+	}
+	if goneStatus != "stopped" {
+		t.Fatalf("gone status=%s", goneStatus)
+	}
+}
+
+func TestTeardownFailedRemoveLeavesDeletedAtNull(t *testing.T) {
+	database := testDB(t)
+	root := filepath.Join(t.TempDir(), ".repos")
+	dir := mkdirPreview(t, root, "busy")
+	insertDeployment(t, database, "busy", "running", "datetime('now')")
+
+	orig := removeAll
+	removeAll = func(string) error {
+		return os.ErrPermission
+	}
+	t.Cleanup(func() { removeAll = orig })
+
+	teardownDeployment(database, root, "busy")
+
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("clone should remain after failed remove: %v", err)
+	}
+	var status string
+	var deleted sql.NullString
+	if err := database.QueryRow(`SELECT status, deleted_at FROM deployments WHERE uuid = ?`, "busy").Scan(&status, &deleted); err != nil {
+		t.Fatal(err)
+	}
+	if status != "stopped" {
+		t.Fatalf("status=%s", status)
+	}
+	if deleted.Valid {
+		t.Fatal("deleted_at must stay null so the sweep retries")
+	}
+
+	removeAll = orig
+	expireDeployments(database, root, 7*24*time.Hour)
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("retry should remove clone, err=%v", err)
+	}
+	if err := database.QueryRow(`SELECT deleted_at FROM deployments WHERE uuid = ?`, "busy").Scan(&deleted); err != nil {
+		t.Fatal(err)
+	}
+	if !deleted.Valid {
+		t.Fatal("deleted_at should be set after a successful remove")
+	}
+}

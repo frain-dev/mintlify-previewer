@@ -82,28 +82,48 @@ func createDeploymentHandler(w http.ResponseWriter, r *http.Request) {
 	startProcessing(newUUID, repoURL, req, deploymentDir, port)
 }
 
+func abortStartIfInactive(uuid, dir string) bool {
+	if isDeploymentActive(db, uuid) {
+		return false
+	}
+	_ = os.RemoveAll(dir)
+	return true
+}
+
 func startProcessing(newUUID string, repoURL string, req Deployment, deploymentDir string, port int) {
 	go func() {
+		if abortStartIfInactive(newUUID, deploymentDir) {
+			return
+		}
 		if err := ensureMintlifyInstalled(); err != nil {
 			log.Infof("Failed to install Mintlify: %v", err)
-			_, _ = db.Exec("UPDATE deployments SET status = ?, error = ? WHERE uuid = ?", "failed", err.Error(), newUUID)
+			setFailedIfActive(db, newUUID, err.Error())
 			return
 		}
 
+		if abortStartIfInactive(newUUID, deploymentDir) {
+			return
+		}
 		if _, err := cloneRepo(repoURL, req.Branch, deploymentDir); err != nil {
 			log.Errorln(err)
-			_, _ = db.Exec("UPDATE deployments SET status = ?, error = ? WHERE uuid = ?", "failed", err.Error(), newUUID)
+			setFailedIfActive(db, newUUID, err.Error())
 			return
 		}
 
+		if abortStartIfInactive(newUUID, deploymentDir) {
+			return
+		}
 		mintFilePath := filepath.Join(deploymentDir, req.DocsPath)
 		if _, err := os.Stat(mintFilePath); os.IsNotExist(err) {
-			_, _ = db.Exec("UPDATE deployments SET status = ?, error = ? WHERE uuid = ?", "failed", "mint.json file not found", newUUID)
+			setFailedIfActive(db, newUUID, "mint.json file not found")
 			return
 		}
 
 		serverDir := filepath.Dir(mintFilePath)
 
+		if abortStartIfInactive(newUUID, deploymentDir) {
+			return
+		}
 		startMintlifyDev(newUUID, port, serverDir)
 	}()
 }

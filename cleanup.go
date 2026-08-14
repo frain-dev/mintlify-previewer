@@ -11,9 +11,9 @@ import (
 )
 
 // previewTTL is how long a clone and mintlify process stay on disk.
-// Each preview copies the full website tree; without a cutoff those
-// directories fill the VM (71 clones were 19 GB when the 30 GB disk died).
 const previewTTL = 7 * 24 * time.Hour
+
+var removeAll = os.RemoveAll
 
 const cleanupInterval = time.Hour
 
@@ -102,22 +102,15 @@ func expireDeployments(database *sql.DB, root string, ttl time.Duration) {
 }
 
 func teardownDeployment(database *sql.DB, root, uuid string) {
+	// Stop the row first so an in-flight start cannot write status=running
+	// after DELETE returns. deleted_at waits until the clone dir is gone.
+	markDeploymentStopped(database, uuid)
 	stopMintlifyProcess(uuid)
 	dir := filepath.Join(root, uuid)
-	if err := os.RemoveAll(dir); err != nil {
+	if err := removeAll(dir); err != nil {
 		log.Errorf("Failed to remove preview dir %s: %v", dir, err)
-	}
-	if database == nil {
 		return
 	}
-	_, err := database.Exec(`
-		UPDATE deployments
-		SET status = ?, deleted_at = CURRENT_TIMESTAMP
-		WHERE uuid = ? AND deleted_at IS NULL
-	`, "stopped", uuid)
-	if err != nil {
-		log.Errorf("Failed to mark deployment %s stopped: %v", uuid, err)
-		return
-	}
+	markDeploymentDeleted(database, uuid)
 	log.Infof("Expired preview %s", uuid)
 }

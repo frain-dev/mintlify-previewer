@@ -96,27 +96,32 @@ func restoreDeployments() {
 			if isEmptyOrOnlyGitFiles(deploymentDir) {
 				log.Infof("Repository not cloned or incomplete for UUID %s. Cloning now...", dep.UUID)
 				_, repoURL := extractPRID(dep.GitHubURL)
+				if abortStartIfInactive(dep.UUID, deploymentDir) {
+					return
+				}
 				if out, err := cloneRepo(repoURL, dep.Branch, deploymentDir); err != nil {
 					log.Infof("Failed to clone repository for UUID %s: %v", dep.UUID, out)
-					_, err2 := db.Exec("UPDATE deployments SET status = ?, error = ? WHERE uuid = ?", "failed", err.Error(), dep.UUID)
-					if err2 != nil {
-						log.Infof("Failed to update status for UUID %s: %v for error %+v", dep.UUID, err2, err)
-					}
+					setFailedIfActive(db, dep.UUID, err.Error())
 					return
 				}
 			}
 
+			if abortStartIfInactive(dep.UUID, deploymentDir) {
+				return
+			}
+
 			mintFilePath := filepath.Join(deploymentDir, dep.DocsPath)
 			if _, err := os.Stat(mintFilePath); os.IsNotExist(err) {
-				_, err2 := db.Exec("UPDATE deployments SET status = ?, error = ? WHERE uuid = ?", "failed", "mint.json file not found", dep.UUID)
-				if err2 != nil {
-					log.Infof("Failed to update status for UUID %s: %v for error %+v", dep.UUID, err2, err)
-				}
+				setFailedIfActive(db, dep.UUID, "mint.json file not found")
 				return
 			}
 
 			serverDir := filepath.Dir(mintFilePath)
 			port := extractPortFromURL(dep.DeployURL)
+
+			if abortStartIfInactive(dep.UUID, deploymentDir) {
+				return
+			}
 
 			startMintlifyDev(dep.UUID, port, serverDir)
 		}()
@@ -138,6 +143,76 @@ func isEmptyOrOnlyGitFiles(dir string) bool {
 	}
 
 	return true // Directory is empty or contains only Git files
+}
+
+func isDeploymentActive(database *sql.DB, uuid string) bool {
+	if database == nil {
+		return false
+	}
+	var n int
+	err := database.QueryRow(`
+		SELECT COUNT(*) FROM deployments
+		WHERE uuid = ? AND deleted_at IS NULL AND status IN ('starting', 'running')
+	`, uuid).Scan(&n)
+	return err == nil && n == 1
+}
+
+func setStatusIfActive(database *sql.DB, uuid, status string) bool {
+	if database == nil {
+		return false
+	}
+	res, err := database.Exec(`
+		UPDATE deployments SET status = ?
+		WHERE uuid = ? AND deleted_at IS NULL AND status IN ('starting', 'running')
+	`, status, uuid)
+	if err != nil {
+		log.Errorf("Failed to update status for %s: %v", uuid, err)
+		return false
+	}
+	n, _ := res.RowsAffected()
+	return n == 1
+}
+
+func setFailedIfActive(database *sql.DB, uuid, errMsg string) bool {
+	if database == nil {
+		return false
+	}
+	res, err := database.Exec(`
+		UPDATE deployments SET status = ?, error = ?
+		WHERE uuid = ? AND deleted_at IS NULL AND status IN ('starting', 'running')
+	`, "failed", errMsg, uuid)
+	if err != nil {
+		log.Errorf("Failed to update status for %s: %v", uuid, err)
+		return false
+	}
+	n, _ := res.RowsAffected()
+	return n == 1
+}
+
+func markDeploymentStopped(database *sql.DB, uuid string) {
+	if database == nil {
+		return
+	}
+	_, err := database.Exec(`
+		UPDATE deployments SET status = ?
+		WHERE uuid = ? AND deleted_at IS NULL
+	`, "stopped", uuid)
+	if err != nil {
+		log.Errorf("Failed to mark deployment %s stopped: %v", uuid, err)
+	}
+}
+
+func markDeploymentDeleted(database *sql.DB, uuid string) {
+	if database == nil {
+		return
+	}
+	_, err := database.Exec(`
+		UPDATE deployments SET deleted_at = CURRENT_TIMESTAMP
+		WHERE uuid = ? AND deleted_at IS NULL
+	`, uuid)
+	if err != nil {
+		log.Errorf("Failed to mark deployment %s deleted: %v", uuid, err)
+	}
 }
 
 func extractPortFromURL(deployURL string) int {
