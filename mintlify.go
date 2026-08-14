@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"mintlify-previewer-backend/log"
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -112,10 +114,7 @@ func killProcessGroup(server *trackedServer) error {
 		return nil
 	}
 	if server.pgid > 0 {
-		if err := syscall.Kill(-server.pgid, syscall.SIGTERM); err != nil {
-			return server.proc.Signal(syscall.SIGTERM)
-		}
-		return nil
+		return syscall.Kill(-server.pgid, syscall.SIGTERM)
 	}
 	return server.proc.Signal(syscall.SIGTERM)
 }
@@ -127,7 +126,7 @@ func waitProcessGone(server *trackedServer, d time.Duration) {
 	pid := server.proc.Pid
 	deadline := time.Now().Add(d)
 	for {
-		reapZombieChildren()
+		reapGroupZombies(server.pgid, pid)
 		if processGroupGone(server.pgid, pid) {
 			return
 		}
@@ -143,13 +142,13 @@ func waitProcessGone(server *trackedServer, d time.Duration) {
 	}
 	deadline = time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
-		reapZombieChildren()
+		reapGroupZombies(server.pgid, pid)
 		if processGroupGone(server.pgid, pid) {
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	reapZombieChildren()
+	reapGroupZombies(server.pgid, pid)
 }
 
 func processGroupGone(pgid, leaderPid int) bool {
@@ -169,12 +168,51 @@ func processReaped(pid int) bool {
 	return wpid == pid
 }
 
-func reapZombieChildren() {
-	for {
+func reapGroupZombies(pgid, leaderPid int) {
+	_ = processReaped(leaderPid)
+	for _, pid := range groupMemberPids(pgid) {
 		var status syscall.WaitStatus
-		wpid, err := syscall.Wait4(-1, &status, syscall.WNOHANG, nil)
-		if err != nil || wpid <= 0 {
-			return
+		_, _ = syscall.Wait4(pid, &status, syscall.WNOHANG, nil)
+	}
+}
+
+func groupMemberPids(pgid int) []int {
+	if pgid <= 0 {
+		return nil
+	}
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return nil
+	}
+	var pids []int
+	for _, entry := range entries {
+		pid, err := strconv.Atoi(entry.Name())
+		if err != nil {
+			continue
+		}
+		if procPgid(pid) == pgid {
+			pids = append(pids, pid)
 		}
 	}
+	return pids
+}
+
+func procPgid(pid int) int {
+	b, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+	if err != nil {
+		return -1
+	}
+	i := bytes.LastIndexByte(b, ')')
+	if i < 0 || i+2 >= len(b) {
+		return -1
+	}
+	fields := strings.Fields(string(b[i+2:]))
+	if len(fields) < 3 {
+		return -1
+	}
+	pgrp, err := strconv.Atoi(fields[2])
+	if err != nil {
+		return -1
+	}
+	return pgrp
 }
