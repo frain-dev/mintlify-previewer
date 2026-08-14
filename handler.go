@@ -55,6 +55,7 @@ func createDeploymentHandler(w http.ResponseWriter, r *http.Request) {
 
 	_, repoURL := extractPRID(req.GitHubURL)
 	if err := checkRepoExists(repoURL, req.Branch); err != nil {
+		_ = os.RemoveAll(deploymentDir)
 		http.Error(w, fmt.Sprintf("Repository check failed: %v", err), http.StatusInternalServerError)
 		return
 	}
@@ -169,15 +170,18 @@ func extractPRID(githubURL string) (string, string) {
 func deleteDeploymentHandler(w http.ResponseWriter, r *http.Request) {
 	uuid := chi.URLParam(r, "uuid")
 
-	err := stopMintlifyServer(uuid)
+	var existing string
+	err := db.QueryRow("SELECT uuid FROM deployments WHERE uuid = ?", uuid).Scan(&existing)
 	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
-			http.Error(w, err.Error(), http.StatusNotFound)
-		} else {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "Deployment not found", http.StatusNotFound)
+			return
 		}
+		http.Error(w, "Database error", http.StatusInternalServerError)
 		return
 	}
+
+	teardownDeployment(db, reposRoot(), uuid)
 
 	w.WriteHeader(http.StatusOK)
 	_, err = fmt.Fprintf(w, "Mintlify server for UUID %s stopped", uuid)

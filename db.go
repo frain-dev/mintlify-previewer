@@ -64,14 +64,13 @@ func initDB() {
 }
 
 func restoreDeployments() {
-	// TODO: Stop deployments after x number of days
 	dir, err := os.Getwd()
 	if err != nil {
 		log.Fatal("Failed to get working directory")
 		return
 	}
 
-	rows, err := db.Query("SELECT uuid, github_url, branch, docs_path, deployment_url, status FROM deployments WHERE status IN ('running', 'starting')")
+	rows, err := db.Query("SELECT uuid, github_url, branch, docs_path, deployment_url, status FROM deployments WHERE status IN ('running', 'starting') AND deleted_at IS NULL")
 	if err != nil {
 		log.Fatalf("Failed to query deployments: %v", err)
 	}

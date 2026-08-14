@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"mintlify-previewer-backend/log"
 	"os"
 	"os/exec"
@@ -27,6 +26,7 @@ func ensureMintlifyInstalled() error {
 func startMintlifyDev(uuid string, port int, dir string) {
 	cmd := exec.Command("mintlify", "dev", "--no-open", "--port", strconv.Itoa(port))
 	cmd.Dir = dir
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	if err := cmd.Start(); err != nil {
 		log.Errorf("Failed to start Mintlify: %v", err)
@@ -54,27 +54,27 @@ func startMintlifyDev(uuid string, port int, dir string) {
 	mu.Unlock()
 }
 
-func stopMintlifyServer(uuid string) error {
+func stopMintlifyProcess(uuid string) {
 	mu.Lock()
 	process, exists := activeServers[uuid]
+	if exists {
+		delete(activeServers, uuid)
+	}
 	mu.Unlock()
 
 	if !exists {
-		log.Errorf("server for UUID %s not found", uuid)
-		return fmt.Errorf("server for UUID %s not found", uuid)
+		return
 	}
 
-	if err := process.Signal(syscall.SIGTERM); err != nil {
-		log.Errorf("Failed to stop Mintlify server: %v", err)
-		return fmt.Errorf("failed to stop server for UUID %s: %v", uuid, err)
+	if err := killProcessGroup(process); err != nil {
+		log.Errorf("Failed to stop Mintlify server for %s: %v", uuid, err)
 	}
+}
 
-	mu.Lock()
-	delete(activeServers, uuid)
-	mu.Unlock()
-
-	log.Infof("Mintlify server for UUID %s stopped", uuid)
-	_, err := db.Exec("UPDATE deployments SET status = ? WHERE uuid = ?", "stopped", uuid)
-
-	return err
+func killProcessGroup(process *os.Process) error {
+	pgid, err := syscall.Getpgid(process.Pid)
+	if err == nil {
+		return syscall.Kill(-pgid, syscall.SIGTERM)
+	}
+	return process.Signal(syscall.SIGTERM)
 }
